@@ -93,7 +93,7 @@ func (l *Log) TryAppend(opNum, logNum, commitNum uint64, entries ...proto.Entry)
 			log.Panicf("vr.oplog: entry %d collision with commit-number entry [commit-number(%d)]", sc, l.CommitNum)
 		default:
 			offset := opNum + 1
-			l.append(entries[sc-offset:]...)
+			l.Append(entries[sc-offset:]...)
 		}
 		l.CommitTo(min(commitNum, lastNewOpNum))
 		return lastNewOpNum, true
@@ -101,7 +101,7 @@ func (l *Log) TryAppend(opNum, logNum, commitNum uint64, entries ...proto.Entry)
 	return 0, false
 }
 
-func (l *Log) append(entries ...proto.Entry) uint64 {
+func (l *Log) Append(entries ...proto.Entry) uint64 {
 	if len(entries) == 0 {
 		return l.LastOpNum()
 	}
@@ -125,14 +125,18 @@ func (l *Log) scanCollision(entries []proto.Entry) uint64 {
 	return 0
 }
 
-func (l *Log) unsafeEntries() []proto.Entry {
+func (l *Log) UnsafeEntries() []proto.Entry {
 	if len(l.unsafe.entries) == 0 {
 		return nil
 	}
 	return l.unsafe.entries
 }
 
-func (l *Log) safeEntries() (entries []proto.Entry) {
+func (l *Log) UnsafeAppliedState() *proto.AppliedState {
+	return l.unsafe.appliedState
+}
+
+func (l *Log) SafeEntries() (entries []proto.Entry) {
 	num := max(l.AppliedNum+1, l.StartOpNum())
 	if l.CommitNum+1 > num {
 		return l.Subset(num, l.CommitNum+1)
@@ -188,11 +192,11 @@ func (l *Log) AppliedTo(num uint64) {
 	l.AppliedNum = num
 }
 
-func (l *Log) safeTo(on, vn uint64) {
+func (l *Log) SafeTo(on, vn uint64) {
 	l.unsafe.safeTo(on, vn)
 }
 
-func (l *Log) safeAppliedStateTo(num uint64) {
+func (l *Log) SafeAppliedStateTo(num uint64) {
 	l.unsafe.safeAppliedStateTo(num)
 }
 
@@ -241,7 +245,7 @@ func (l *Log) TryCommit(maxOpNum, viewNum uint64) bool {
 	return false
 }
 
-func (l *Log) recover(state proto.AppliedState) {
+func (l *Log) Recover(state proto.AppliedState) {
 	log.Printf("vr.oplog: log [%s] starts to reset applied state [op-number: %d, view-number: %d]", l, state.Applied.ViewStamp.OpNum, state.Applied.ViewStamp.ViewNum)
 	l.CommitNum = state.Applied.ViewStamp.OpNum
 	l.unsafe.recover(state)
@@ -313,7 +317,7 @@ func (s *Store) Append(entries []proto.Entry) error {
 	} else if uint64(len(s.entries)) == offset {
 		s.entries = append(s.entries, entries...)
 	} else {
-		log.Panicf("vr.store: not found oplog entry [last: %d, append at: %d]",
+		log.Panicf("vr.store: not found oplog entry [last: %d, Append at: %d]",
 			s.appliedState.Applied.ViewStamp.OpNum+uint64(len(s.entries)), entries[0].ViewStamp.OpNum)
 	}
 	return nil
