@@ -1,9 +1,9 @@
-package log_test
+package log
 
 import (
 	"reflect"
 	"testing"
-	"github.com/open-rsm/vr/proto"
+	"github.com/open-fsm/spec/proto"
 )
 
 func TestAppend(t *testing.T) {
@@ -23,15 +23,15 @@ func TestAppend(t *testing.T) {
 	for i, test := range cases {
 		store := NewStore()
 		store.Append(prevEntries)
-		log := newOpLog(store)
-		opNum := log.append(test.entries...)
+		log := New(store)
+		opNum := log.Append(test.entries...)
 		if opNum != test.expOpNum {
 			t.Errorf("#%d: last op-number = %d, expected %d", i, opNum, test.expOpNum)
 		}
-		if rv := log.entries(1); !reflect.DeepEqual(rv, test.expEntries) {
+		if rv := log.Entries(1); !reflect.DeepEqual(rv, test.expEntries) {
 			t.Errorf("#%d: log entries = %+v, expected %+v", i, rv, test.expEntries)
 		}
-		if v := log.unsafe.offset; v != test.expUnsafe {
+		if v := log.Unsafe.Offset; v != test.expUnsafe {
 			t.Errorf("#%d: unsafe = %d, expected %d", i, v, test.expUnsafe)
 		}
 	}

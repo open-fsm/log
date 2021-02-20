@@ -8,17 +8,17 @@ import (
 	"github.com/open-fsm/spec/proto"
 )
 
-var ErrNotReached = errors.New("vr.store: access entry at op-number is not reached")
-var ErrArchived = errors.New("vr.store: access op-number is not reached due to archive")
-var ErrOverflow = errors.New("vr.store: overflow")
-var ErrUnavailable = errors.New("vr.store: requested entry at op-number is unavailable")
+var ErrNotReached = errors.New("vr.Store: access entry at op-number is not reached")
+var ErrArchived = errors.New("vr.Store: access op-number is not reached due to archive")
+var ErrOverflow = errors.New("vr.Store: overflow")
+var ErrUnavailable = errors.New("vr.Store: requested entry at op-number is unavailable")
 
 // operation log manager for view stamped replication
 type Log struct {
 	// has not been WAL
-	unsafe
+	Unsafe
 
-	store      *Store // store handler
+	Store      *Store // Store handler
 	CommitNum  uint64 // current committed location
 	AppliedNum uint64 // logs that have been applied
 }
@@ -37,11 +37,11 @@ func New(store *Store) *Log {
 		panic(err)
 	}
 	opLog := &Log{
-		store:      store,
+		Store:      store,
 		CommitNum:  startOpNum - 1,
 		AppliedNum: startOpNum - 1,
 	}
-	opLog.offset = lastOpNum + 1
+	opLog.Offset = lastOpNum + 1
 	return opLog
 }
 
@@ -62,17 +62,17 @@ func (l *Log) Subset(low uint64, up uint64) []proto.Entry {
 		return nil
 	}
 	var entries []proto.Entry
-	if l.unsafe.offset > low {
-		storedEntries, err := l.store.Subset(low, min(up, l.unsafe.offset))
+	if l.Unsafe.Offset > low {
+		storedEntries, err := l.Store.Subset(low, min(up, l.Unsafe.Offset))
 		if err == ErrNotReached {
-			log.Panicf("vr.oplog: Entries[%d:%d) is unavailable from stores", low, min(up, l.unsafe.offset))
+			log.Panicf("vr.oplog: Entries[%d:%d) is unavailable from stores", low, min(up, l.Unsafe.Offset))
 		} else if err != nil {
 			panic(err)
 		}
 		entries = storedEntries
 	}
-	if l.unsafe.offset < up {
-		unsafe := l.unsafe.subset(max(low, l.unsafe.offset), up)
+	if l.Unsafe.Offset < up {
+		unsafe := l.Unsafe.subset(max(low, l.Unsafe.Offset), up)
 		if len(entries) > 0 {
 			entries = append([]proto.Entry{}, entries...)
 			entries = append(entries, unsafe...)
@@ -108,7 +108,7 @@ func (l *Log) Append(entries ...proto.Entry) uint64 {
 	if ahead := entries[0].ViewStamp.OpNum - 1; ahead < l.CommitNum {
 		log.Panicf("vr.oplog: ahead(%d) is out of range [commit-number(%d)]", ahead, l.CommitNum)
 	}
-	l.unsafe.truncateAndAppend(entries)
+	l.Unsafe.truncateAndAppend(entries)
 	return l.LastOpNum()
 }
 
@@ -126,14 +126,14 @@ func (l *Log) scanCollision(entries []proto.Entry) uint64 {
 }
 
 func (l *Log) UnsafeEntries() []proto.Entry {
-	if len(l.unsafe.entries) == 0 {
+	if len(l.Unsafe.entries) == 0 {
 		return nil
 	}
-	return l.unsafe.entries
+	return l.Unsafe.entries
 }
 
 func (l *Log) UnsafeAppliedState() *proto.AppliedState {
-	return l.unsafe.appliedState
+	return l.Unsafe.appliedState
 }
 
 func (l *Log) SafeEntries() (entries []proto.Entry) {
@@ -145,17 +145,17 @@ func (l *Log) SafeEntries() (entries []proto.Entry) {
 }
 
 func (l *Log) AppliedState() (proto.AppliedState, error) {
-	if l.unsafe.appliedState != nil {
-		return *l.unsafe.appliedState, nil
+	if l.Unsafe.appliedState != nil {
+		return *l.Unsafe.appliedState, nil
 	}
-	return l.store.GetAppliedState()
+	return l.Store.GetAppliedState()
 }
 
 func (l *Log) StartOpNum() uint64 {
-	if num, ok := l.unsafe.tryGetStartOpNum(); ok {
+	if num, ok := l.Unsafe.tryGetStartOpNum(); ok {
 		return num
 	}
-	num, err := l.store.StartOpNum()
+	num, err := l.Store.StartOpNum()
 	if err != nil {
 		panic(err)
 	}
@@ -163,10 +163,10 @@ func (l *Log) StartOpNum() uint64 {
 }
 
 func (l *Log) LastOpNum() uint64 {
-	if num, ok := l.unsafe.tryGetLastOpNum(); ok {
+	if num, ok := l.Unsafe.tryGetLastOpNum(); ok {
 		return num
 	}
-	num, err := l.store.LastOpNum()
+	num, err := l.Store.LastOpNum()
 	if err != nil {
 		panic(err)
 	}
@@ -193,11 +193,11 @@ func (l *Log) AppliedTo(num uint64) {
 }
 
 func (l *Log) SafeTo(on, vn uint64) {
-	l.unsafe.safeTo(on, vn)
+	l.Unsafe.safeTo(on, vn)
 }
 
 func (l *Log) SafeAppliedStateTo(num uint64) {
-	l.unsafe.safeAppliedStateTo(num)
+	l.Unsafe.safeAppliedStateTo(num)
 }
 
 func (l *Log) LastViewNum() uint64 {
@@ -208,10 +208,10 @@ func (l *Log) ViewNum(num uint64) uint64 {
 	if num < (l.StartOpNum()-1) || num > l.LastOpNum() {
 		return 0
 	}
-	if vn, ok := l.unsafe.tryGetViewNum(num); ok {
+	if vn, ok := l.Unsafe.tryGetViewNum(num); ok {
 		return vn
 	}
-	svn, err := l.store.ViewNum(num)
+	svn, err := l.Store.ViewNum(num)
 	if err == nil {
 		return svn
 	}
@@ -248,29 +248,29 @@ func (l *Log) TryCommit(maxOpNum, viewNum uint64) bool {
 func (l *Log) Recover(state proto.AppliedState) {
 	log.Printf("vr.oplog: log [%s] starts to reset applied state [op-number: %d, view-number: %d]", l, state.Applied.ViewStamp.OpNum, state.Applied.ViewStamp.ViewNum)
 	l.CommitNum = state.Applied.ViewStamp.OpNum
-	l.unsafe.recover(state)
+	l.Unsafe.recover(state)
 }
 
 func (l *Log) String() string {
-	return fmt.Sprintf("vr.oplog: commit-number=%d, applied-number=%d, unsafe.offsets=%d, len(unsafe.persistent_entries)=%d", l.CommitNum, l.AppliedNum, l.unsafe.offset, len(l.unsafe.entries))
+	return fmt.Sprintf("vr.oplog: commit-number=%d, applied-number=%d, Unsafe.offsets=%d, len(Unsafe.persistent_entries)=%d", l.CommitNum, l.AppliedNum, l.Unsafe.Offset, len(l.Unsafe.entries))
 }
 
 // storage models of view stamped replication
 type Store struct {
 	sync.Mutex
-	hardState    proto.HardState     // persistent state that has been stored to disk
-	appliedState proto.AppliedState  // the state that has been used by the application layer
-	entries      []proto.Entry       // used to manage newly added log Entries
+	HardState    proto.HardState    // persistent state that has been stored to disk
+	appliedState proto.AppliedState // the state that has been used by the application layer
+	Entries      []proto.Entry      // used to manage newly added log Entries
 }
 
 func NewStore() *Store {
 	return &Store{
-		entries: make([]proto.Entry, 1),
+		Entries: make([]proto.Entry, 1),
 	}
 }
 
 func (s *Store) SetHardState(hs proto.HardState) error {
-	s.hardState = hs
+	s.HardState = hs
 	return nil
 }
 
@@ -278,7 +278,7 @@ func (s *Store) SetAppliedState(as proto.AppliedState) error {
 	s.Lock()
 	defer s.Unlock()
 	s.appliedState = as
-	s.entries = []proto.Entry{{ViewStamp: as.Applied.ViewStamp}}
+	s.Entries = []proto.Entry{{ViewStamp: as.Applied.ViewStamp}}
 	return nil
 }
 
@@ -287,7 +287,7 @@ func (s *Store) LoadConfigurationState() (proto.ConfigurationState, error) {
 }
 
 func (s *Store) LoadHardState() (proto.HardState, error) {
-	return s.hardState, nil
+	return s.HardState, nil
 }
 
 func (s *Store) GetAppliedState() (proto.AppliedState, error) {
@@ -311,14 +311,14 @@ func (s *Store) Append(entries []proto.Entry) error {
 		entries = entries[start-entries[0].ViewStamp.OpNum:]
 	}
 	offset := entries[0].ViewStamp.OpNum - s.startOpNum()
-	if uint64(len(s.entries)) > offset {
-		s.entries = append([]proto.Entry{}, s.entries[:offset]...)
-		s.entries = append(s.entries, entries...)
-	} else if uint64(len(s.entries)) == offset {
-		s.entries = append(s.entries, entries...)
+	if uint64(len(s.Entries)) > offset {
+		s.Entries = append([]proto.Entry{}, s.Entries[:offset]...)
+		s.Entries = append(s.Entries, entries...)
+	} else if uint64(len(s.Entries)) == offset {
+		s.Entries = append(s.Entries, entries...)
 	} else {
-		log.Panicf("vr.store: not found oplog entry [last: %d, Append at: %d]",
-			s.appliedState.Applied.ViewStamp.OpNum+uint64(len(s.entries)), entries[0].ViewStamp.OpNum)
+		log.Panicf("vr.Store: not found oplog entry [last: %d, Append at: %d]",
+			s.appliedState.Applied.ViewStamp.OpNum+uint64(len(s.Entries)), entries[0].ViewStamp.OpNum)
 	}
 	return nil
 }
@@ -326,36 +326,36 @@ func (s *Store) Append(entries []proto.Entry) error {
 func (s *Store) Subset(low, up uint64) ([]proto.Entry, error) {
 	s.Lock()
 	defer s.Unlock()
-	offset := s.entries[0].ViewStamp.OpNum
+	offset := s.Entries[0].ViewStamp.OpNum
 	if low <= offset {
 		return nil, ErrArchived
 	}
 	if up > s.lastOpNum()+1 {
-		log.Panicf("vr.store: Entries up(%d) is overflow last-op-number(%d)", up, s.lastOpNum())
+		log.Panicf("vr.Store: Entries up(%d) is overflow last-op-number(%d)", up, s.lastOpNum())
 	}
-	if len(s.entries) == 1 {
+	if len(s.Entries) == 1 {
 		return nil, ErrNotReached
 	}
-	return s.entries[low-offset:up-offset], nil
+	return s.Entries[low-offset:up-offset], nil
 }
 
 func (s *Store) ViewNum(num uint64) (uint64, error) {
 	s.Lock()
 	defer s.Unlock()
-	vo := s.entries[0].ViewStamp.OpNum
+	vo := s.Entries[0].ViewStamp.OpNum
 	if num < vo {
 		return 0, ErrArchived
 	}
-	if int(num-vo) >= len(s.entries) {
+	if int(num-vo) >= len(s.Entries) {
 		return 0, ErrUnavailable
 	}
-	return s.entries[num-vo].ViewStamp.ViewNum, nil
+	return s.Entries[num-vo].ViewStamp.ViewNum, nil
 }
 
 func (s *Store) CommitNum() (uint64, error) {
 	s.Lock()
 	defer s.Unlock()
-	return s.hardState.CommitNum, nil
+	return s.HardState.CommitNum, nil
 }
 
 func (s *Store) StartOpNum() (uint64, error) {
@@ -365,7 +365,7 @@ func (s *Store) StartOpNum() (uint64, error) {
 }
 
 func (s *Store) startOpNum() uint64 {
-	return s.entries[0].ViewStamp.OpNum
+	return s.Entries[0].ViewStamp.OpNum
 }
 
 func (s *Store) LastOpNum() (uint64, error) {
@@ -375,7 +375,7 @@ func (s *Store) LastOpNum() (uint64, error) {
 }
 
 func (s *Store) lastOpNum() uint64 {
-	return s.entries[0].ViewStamp.OpNum + uint64(len(s.entries))
+	return s.Entries[0].ViewStamp.OpNum + uint64(len(s.Entries))
 }
 
 func (s *Store) CreateAppliedState(num uint64, data []byte, rs *proto.ConfigurationState) (proto.AppliedState, error) {
@@ -385,10 +385,10 @@ func (s *Store) CreateAppliedState(num uint64, data []byte, rs *proto.Configurat
 		return proto.AppliedState{}, ErrOverflow
 	}
 	if num > s.lastOpNum() {
-		log.Panicf("vr.store: applied-number state %d is overflow last op-number(%d)", num, s.lastOpNum())
+		log.Panicf("vr.Store: applied-number state %d is overflow last op-number(%d)", num, s.lastOpNum())
 	}
 	s.appliedState.Applied.ViewStamp.OpNum = num
-	s.appliedState.Applied.ViewStamp.ViewNum = s.entries[num-s.startOpNum()].ViewStamp.ViewNum
+	s.appliedState.Applied.ViewStamp.ViewNum = s.Entries[num-s.startOpNum()].ViewStamp.ViewNum
 	s.appliedState.Data = data
 	if rs != nil {
 		s.appliedState.Applied.ConfigurationState = *rs
@@ -404,62 +404,62 @@ func (s *Store) Archive(archiveNum uint64) error {
 		return ErrArchived
 	}
 	if archiveNum >= s.lastOpNum() {
-		log.Panicf("vr.store: archive %d is overflow last op-number(%d)", archiveNum, offset+uint64(len(s.entries))-1)
+		log.Panicf("vr.Store: archive %d is overflow last op-number(%d)", archiveNum, offset+uint64(len(s.Entries))-1)
 	}
 	num := archiveNum - offset
-	entries := make([]proto.Entry, 1, 1+uint64(len(s.entries))-num)
-	entries[0].ViewStamp.OpNum = s.entries[num].ViewStamp.OpNum
-	entries[0].ViewStamp.ViewNum = s.entries[num].ViewStamp.ViewNum
-	entries = append(entries, s.entries[num+1:]...)
-	s.entries = entries
+	entries := make([]proto.Entry, 1, 1+uint64(len(s.Entries))-num)
+	entries[0].ViewStamp.OpNum = s.Entries[num].ViewStamp.OpNum
+	entries[0].ViewStamp.ViewNum = s.Entries[num].ViewStamp.ViewNum
+	entries = append(entries, s.Entries[num+1:]...)
+	s.Entries = entries
 	return nil
 }
 
 // used to manage the intermediate state that has not
 // yet been written to disk
-type unsafe struct {
-	offset       uint64               // the position of the last log currently loaded
-	entries      []proto.Entry        // temporary logs that have not been wal
-	appliedState *proto.AppliedState  // applied state handler
+type Unsafe struct {
+	Offset       uint64              // the position of the last log currently loaded
+	entries      []proto.Entry       // temporary logs that have not been wal
+	appliedState *proto.AppliedState // applied state handler
 }
 
-func (u *unsafe) subset(low uint64, up uint64) []proto.Entry {
+func (u *Unsafe) subset(low uint64, up uint64) []proto.Entry {
 	if low > up {
-		log.Panicf("vr.unsafe: invalid unsafe.Subset %d > %d", low, up)
+		log.Panicf("vr.Unsafe: invalid Unsafe.Subset %d > %d", low, up)
 	}
-	lower := u.offset
+	lower := u.Offset
 	upper := lower + uint64(len(u.entries))
 	if low < lower || up > upper {
-		log.Panicf("vr.unsafe: unsafe.Subset[%d,%d) overflow [%d,%d]", low, up, lower, upper)
+		log.Panicf("vr.Unsafe: Unsafe.Subset[%d,%d) overflow [%d,%d]", low, up, lower, upper)
 	}
-	return u.entries[low-u.offset : up-u.offset]
+	return u.entries[low-u.Offset: up-u.Offset]
 }
 
-func (u *unsafe) truncateAndAppend(entries []proto.Entry) {
+func (u *Unsafe) truncateAndAppend(entries []proto.Entry) {
 	ahead := entries[0].ViewStamp.OpNum - 1
-	if ahead == u.offset+uint64(len(u.entries))-1 {
+	if ahead == u.Offset+uint64(len(u.entries))-1 {
 		u.entries = append(u.entries, entries...)
-	} else if ahead < u.offset {
-		log.Printf("vr.unsafe: replace the unsafe Entries from number %d", ahead+1)
-		u.offset = ahead + 1
+	} else if ahead < u.Offset {
+		log.Printf("vr.Unsafe: replace the Unsafe Entries from number %d", ahead+1)
+		u.Offset = ahead + 1
 		u.entries = entries
 	} else {
-		log.Printf("vr.unsafe: truncate the unsafe Entries to number %d", ahead)
-		u.entries = append([]proto.Entry{}, u.subset(u.offset, ahead+1)...)
+		log.Printf("vr.Unsafe: truncate the Unsafe Entries to number %d", ahead)
+		u.entries = append([]proto.Entry{}, u.subset(u.Offset, ahead+1)...)
 		u.entries = append(u.entries, entries...)
 	}
 }
 
-func (u *unsafe) tryGetStartOpNum() (uint64, bool) {
+func (u *Unsafe) tryGetStartOpNum() (uint64, bool) {
 	if as := u.appliedState; as != nil {
 		return as.Applied.ViewStamp.OpNum + 1, true
 	}
 	return 0, false
 }
 
-func (u *unsafe) tryGetLastOpNum() (uint64, bool) {
+func (u *Unsafe) tryGetLastOpNum() (uint64, bool) {
 	if el := len(u.entries); el != 0 {
-		return u.offset + uint64(el) - 1, true
+		return u.Offset + uint64(el) - 1, true
 	}
 	if as := u.appliedState; as != nil {
 		return as.Applied.ViewStamp.OpNum, true
@@ -467,8 +467,8 @@ func (u *unsafe) tryGetLastOpNum() (uint64, bool) {
 	return 0, false
 }
 
-func (u *unsafe) tryGetViewNum(num uint64) (uint64, bool) {
-	if num < u.offset {
+func (u *Unsafe) tryGetViewNum(num uint64) (uint64, bool) {
+	if num < u.Offset {
 		if u.appliedState == nil {
 			return 0, false
 		}
@@ -484,29 +484,29 @@ func (u *unsafe) tryGetViewNum(num uint64) (uint64, bool) {
 	if num > last {
 		return 0, false
 	}
-	return u.entries[num-u.offset].ViewStamp.ViewNum, true
+	return u.entries[num-u.Offset].ViewStamp.ViewNum, true
 }
 
-func (u *unsafe) safeTo(on, vn uint64) {
+func (u *Unsafe) safeTo(on, vn uint64) {
 	this, ok := u.tryGetViewNum(on)
 	if !ok {
 		return
 	}
-	if this == vn && on >= u.offset {
-		u.entries = u.entries[on+1-u.offset:]
-		u.offset = on + 1
+	if this == vn && on >= u.Offset {
+		u.entries = u.entries[on+1-u.Offset:]
+		u.Offset = on + 1
 	}
 }
 
-func (u *unsafe) safeAppliedStateTo(num uint64) {
+func (u *Unsafe) safeAppliedStateTo(num uint64) {
 	if u.appliedState != nil && u.appliedState.Applied.ViewStamp.OpNum == num {
 		u.appliedState = nil
 	}
 }
 
-func (u *unsafe) recover(state proto.AppliedState) {
+func (u *Unsafe) recover(state proto.AppliedState) {
 	u.entries = nil
-	u.offset = state.Applied.ViewStamp.OpNum + 1
+	u.Offset = state.Applied.ViewStamp.OpNum + 1
 	u.appliedState = &state
 }
 
