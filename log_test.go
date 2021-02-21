@@ -3,22 +3,27 @@ package log
 import (
 	"reflect"
 	"testing"
+	"github.com/open-fsm/spec"
 	"github.com/open-fsm/spec/proto"
 )
 
+func initViewStampCase() {
+	spec.InitViewStampCase()
+}
+
 func TestAppend(t *testing.T) {
 	initViewStampCase()
-	prevEntries := []proto.Entry{{ViewStamp: v1o1}, {ViewStamp: v2o2}}
+	prevEntries := []proto.Entry{{ViewStamp: spec.V1o1}, {ViewStamp: spec.V2o2}}
 	cases := []struct {
 		entries    []proto.Entry
 		expOpNum   uint64
 		expEntries []proto.Entry
 		expUnsafe  uint64
 	}{
-		{[]proto.Entry{},2,[]proto.Entry{{ViewStamp: v1o1}, {ViewStamp: v2o2}},3 },
-		{[]proto.Entry{{ViewStamp: v2o3}},3,[]proto.Entry{{ViewStamp: v1o1}, {ViewStamp: v2o2}, {ViewStamp: v2o3}},3 },
-		{[]proto.Entry{{ViewStamp: v2o1}},1,[]proto.Entry{{ViewStamp: v2o1}},1 },
-		{[]proto.Entry{{ViewStamp: v3o2}, {ViewStamp: v3o3}},3,[]proto.Entry{{ViewStamp: v1o1}, {ViewStamp: v3o2}, {ViewStamp: v3o3}}, 2 },
+		{[]proto.Entry{},2,[]proto.Entry{{ViewStamp: spec.V1o1}, {ViewStamp: spec.V2o2}},3 },
+		{[]proto.Entry{{ViewStamp: spec.V2o3}},3,[]proto.Entry{{ViewStamp: spec.V1o1}, {ViewStamp: spec.V2o2}, {ViewStamp: spec.V2o3}},3 },
+		{[]proto.Entry{{ViewStamp: spec.V2o1}},1,[]proto.Entry{{ViewStamp: spec.V2o1}},1 },
+		{[]proto.Entry{{ViewStamp: spec.V3o2}, {ViewStamp: spec.V3o3}},3,[]proto.Entry{{ViewStamp: spec.V1o1}, {ViewStamp: spec.V3o2}, {ViewStamp: spec.V3o3}}, 2 },
 	}
 	for i, test := range cases {
 		store := NewStore()
@@ -39,7 +44,7 @@ func TestAppend(t *testing.T) {
 
 func TestTryAppend(t *testing.T) {
 	initViewStampCase()
-	prevEntries := []proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}}
+	prevEntries := []proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}}
 	lastOpNum := uint64(3)
 	lastViewNum := uint64(3)
 	commitNum := uint64(1)
@@ -115,9 +120,9 @@ func TestTryAppend(t *testing.T) {
 		},
 	}
 	for i, test := range cases {
-		opLog := newOpLog(NewStore())
-		opLog.append(prevEntries...)
-		opLog.commitNum = commitNum
+		log := New(NewStore())
+		log.Append(prevEntries...)
+		log.CommitNum = commitNum
 		func() {
 			defer func() {
 				if r := recover(); r != nil {
@@ -126,8 +131,8 @@ func TestTryAppend(t *testing.T) {
 					}
 				}
 			}()
-			rvLastOpNum, rvAppend := opLog.tryAppend(test.opNum, test.logViewNum, test.commitNum, test.entries...)
-			vCommitNum := opLog.commitNum
+			rvLastOpNum, rvAppend := log.TryAppend(test.opNum, test.logViewNum, test.commitNum, test.entries...)
+			vCommitNum := log.CommitNum
 			if rvLastOpNum != test.expLastOpNum {
 				t.Errorf("#%d: last op-number = %d, expected %d", i, rvLastOpNum, test.expLastOpNum)
 			}
@@ -138,7 +143,7 @@ func TestTryAppend(t *testing.T) {
 				t.Errorf("#%d: commit-number = %d, expected %d", i, vCommitNum, test.expCommitNum)
 			}
 			if rvAppend && len(test.entries) != 0 {
-				rvEntries := opLog.subset(opLog.lastOpNum()-uint64(len(test.entries))+1, opLog.lastOpNum()+1)
+				rvEntries := log.subset(log.LastOpNum()-uint64(len(test.entries))+1, log.LastOpNum()+1)
 				if !reflect.DeepEqual(test.entries, rvEntries) {
 					t.Errorf("%d: appended entries = %v, expected %v", i, rvEntries, test.entries)
 				}
@@ -149,12 +154,12 @@ func TestTryAppend(t *testing.T) {
 
 func TestNextEntries(t *testing.T) {
 	appliedState := proto.AppliedState{
-		Applied: proto.Applied{ViewStamp: v1o3},
+		Applied: proto.Applied{ViewStamp: spec.V1o3},
 	}
 	entries := []proto.Entry{
-		{ViewStamp:v1o4},
-		{ViewStamp:v1o5},
-		{ViewStamp:v1o6},
+		{ViewStamp:spec.V1o4},
+		{ViewStamp:spec.V1o5},
+		{ViewStamp:spec.V1o6},
 	}
 	cases := []struct {
 		appliedNum uint64
@@ -168,11 +173,11 @@ func TestNextEntries(t *testing.T) {
 	for i, test := range cases {
 		store := NewStore()
 		store.SetAppliedState(appliedState)
-		opLog := newOpLog(store)
-		opLog.append(entries...)
-		opLog.tryCommit(5, 1)
-		opLog.appliedTo(test.appliedNum)
-		entryList := opLog.safeEntries()
+		log := New(store)
+		log.Append(entries...)
+		log.TryCommit(5, 1)
+		log.AppliedTo(test.appliedNum)
+		entryList := log.SafeEntries()
 		if !reflect.DeepEqual(entryList, test.expEntries) {
 			t.Errorf("#%d: entry list = %+v, expected %+v", i, entryList, test.expEntries)
 		}
@@ -180,7 +185,7 @@ func TestNextEntries(t *testing.T) {
 }
 
 func TestUnsafeEntries(t *testing.T) {
-	prevEntries := []proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}}
+	prevEntries := []proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}}
 	cases := []struct {
 		unsafe     uint64
 		expEntries []proto.Entry
@@ -191,17 +196,17 @@ func TestUnsafeEntries(t *testing.T) {
 	for i, test := range cases {
 		store := NewStore()
 		store.Append(prevEntries[:test.unsafe-1])
-		log := newOpLog(store)
-		log.append(prevEntries[test.unsafe-1:]...)
-		entries := log.unsafeEntries()
+		log := New(store)
+		log.Append(prevEntries[test.unsafe-1:]...)
+		entries := log.UnsafeEntries()
 		if l := len(entries); l > 0 {
-			log.safeTo(entries[l-1].ViewStamp.OpNum, entries[l-i].ViewStamp.ViewNum)
+			log.SafeTo(entries[l-1].ViewStamp.OpNum, entries[l-i].ViewStamp.ViewNum)
 		}
 		if !reflect.DeepEqual(entries, test.expEntries) {
 			t.Errorf("#%d: unsafe entries = %+v, expected %+v", i, entries, test.expEntries)
 		}
 		w := prevEntries[len(prevEntries)-1].ViewStamp.OpNum + 1
-		if g := log.unsafe.offset; g != w {
+		if g := log.Unsafe.Offset; g != w {
 			t.Errorf("#%d: unsafe = %d, expected %d", i, g, w)
 		}
 	}
@@ -209,7 +214,7 @@ func TestUnsafeEntries(t *testing.T) {
 
 func TestCommitTo(t *testing.T) {
 	initViewStampCase()
-	prevEntries := []proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}}
+	prevEntries := []proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}}
 	commitNum := uint64(2)
 	cases := []struct {
 		commitNum    uint64
@@ -229,12 +234,12 @@ func TestCommitTo(t *testing.T) {
 					}
 				}
 			}()
-			log := newOpLog(NewStore())
-			log.append(prevEntries...)
-			log.commitNum = commitNum
-			log.commitTo(test.commitNum)
-			if log.commitNum != test.expCommitNum {
-				t.Errorf("#%d: commit-number = %d, expected %d", i, log.commitNum, test.expCommitNum)
+			log := New(NewStore())
+			log.Append(prevEntries...)
+			log.CommitNum = commitNum
+			log.CommitTo(test.commitNum)
+			if log.CommitNum != test.expCommitNum {
+				t.Errorf("#%d: commit-number = %d, expected %d", i, log.CommitNum, test.expCommitNum)
 			}
 		}()
 	}
@@ -253,11 +258,11 @@ func TestSafeTo(t *testing.T) {
 		{3,1,1},
 	}
 	for i, test := range cases {
-		log := newOpLog(NewStore())
-		log.append([]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}}...)
-		log.safeTo(test.safeOpNum, test.safeViewNum)
-		if log.unsafe.offset != test.expUnsafe {
-			t.Errorf("#%d: unsafe = %d, expected %d", i, log.unsafe.offset, test.expUnsafe)
+		log := New(NewStore())
+		log.Append([]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}}...)
+		log.SafeTo(test.safeOpNum, test.safeViewNum)
+		if log.Unsafe.Offset != test.expUnsafe {
+			t.Errorf("#%d: unsafe = %d, expected %d", i, log.Unsafe.Offset, test.expUnsafe)
 		}
 	}
 }
@@ -287,11 +292,11 @@ func TestSafeToWithAppliedState(t *testing.T) {
 	for i, test := range cases {
 		store := NewStore()
 		store.SetAppliedState(appliedState)
-		log := newOpLog(store)
-		log.append(test.newEntries...)
-		log.safeTo(test.safeOpNum, test.safeViewNum)
-		if log.unsafe.offset != test.expUnsafe {
-			t.Errorf("#%d: unsafe = %d, expected %d", i, log.unsafe.offset, test.expUnsafe)
+		log := New(store)
+		log.Append(test.newEntries...)
+		log.SafeTo(test.safeOpNum, test.safeViewNum)
+		if log.Unsafe.Offset != test.expUnsafe {
+			t.Errorf("#%d: unsafe = %d, expected %d", i, log.Unsafe.Offset, test.expUnsafe)
 		}
 	}
 }
@@ -320,9 +325,9 @@ func TestArchive(t *testing.T) {
 			for num := uint64(1); num <= test.lastOpNum; num++ {
 				store.Append([]proto.Entry{{ViewStamp:proto.ViewStamp{OpNum: num}}})
 			}
-			opLog := newOpLog(store)
-			opLog.tryCommit(test.lastOpNum, 0)
-			opLog.appliedTo(opLog.commitNum)
+			log := New(store)
+			log.TryCommit(test.lastOpNum, 0)
+			log.AppliedTo(log.CommitNum)
 			for j := 0; j < len(test.archive); j++ {
 				err := store.Archive(test.archive[j])
 				if err != nil {
@@ -331,8 +336,8 @@ func TestArchive(t *testing.T) {
 					}
 					continue
 				}
-				if len(opLog.totalEntries()) != test.expOverage[j] {
-					t.Errorf("case %d.%d len = %d, expected %d", i, j, len(opLog.totalEntries()), test.expOverage[j])
+				if len(log.TotalEntries()) != test.expOverage[j] {
+					t.Errorf("case %d.%d len = %d, expected %d", i, j, len(log.TotalEntries()), test.expOverage[j])
 				}
 			}
 		}()
@@ -348,43 +353,43 @@ func TestArchiveDisorder(t *testing.T) {
 	for i = 1; i <= unsafeOpNum; i++ {
 		store.Append([]proto.Entry{{ViewStamp:proto.ViewStamp{ViewNum: uint64(i), OpNum: uint64(i)}}})
 	}
-	opLog := newOpLog(store)
+	log := New(store)
 	for i = unsafeOpNum; i < lastOpNum; i++ {
-		opLog.append(proto.Entry{ViewStamp:proto.ViewStamp{ViewNum: uint64(i + 1), OpNum: uint64(i + 1)}})
+		log.Append(proto.Entry{ViewStamp:proto.ViewStamp{ViewNum: uint64(i + 1), OpNum: uint64(i + 1)}})
 	}
-	ok := opLog.tryCommit(lastOpNum, lastViewNum)
+	ok := log.TryCommit(lastOpNum, lastViewNum)
 	if !ok {
 		t.Fatalf("try commit returned false")
 	}
-	opLog.appliedTo(opLog.commitNum)
+	log.AppliedTo(log.CommitNum)
 	offset := uint64(500)
 	store.Archive(offset)
-	if opLog.lastOpNum() != lastOpNum {
-		t.Errorf("last op-number = %d, expected %d", opLog.lastOpNum(), lastOpNum)
+	if log.LastOpNum() != lastOpNum {
+		t.Errorf("last op-number = %d, expected %d", log.LastOpNum(), lastOpNum)
 	}
-	for j := offset; j <= opLog.lastOpNum(); j++ {
-		if opLog.viewNum(j) != j {
-			t.Errorf("view-number(%d) = %d, expected %d", j, opLog.viewNum(j), j)
+	for j := offset; j <= log.LastOpNum(); j++ {
+		if log.ViewNum(j) != j {
+			t.Errorf("view-number(%d) = %d, expected %d", j, log.ViewNum(j), j)
 		}
 	}
-	for j := offset; j <= opLog.lastOpNum(); j++ {
-		if !opLog.checkNum(j, j) {
+	for j := offset; j <= log.LastOpNum(); j++ {
+		if !log.CheckNum(j, j) {
 			t.Errorf("check view-number(%d) = false, expected true", j)
 		}
 	}
-	unsafeEntries := opLog.unsafeEntries()
+	unsafeEntries := log.UnsafeEntries()
 	if l := len(unsafeEntries); l != 250 {
 		t.Errorf("unsafe entries length = %d, expected = %d", l, 250)
 	}
 	if unsafeEntries[0].ViewStamp.OpNum != 751 {
 		t.Errorf("op-number = %d, expected = %d", unsafeEntries[0].ViewStamp.OpNum, 751)
 	}
-	prev := opLog.lastOpNum()
-	opLog.append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: opLog.lastOpNum() + 1, ViewNum: opLog.lastOpNum() + 1}})
-	if opLog.lastOpNum() != prev+1 {
-		t.Errorf("last op-number = %d, expected = %d", opLog.lastOpNum(), prev+1)
+	prev := log.LastOpNum()
+	log.Append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: log.LastOpNum() + 1, ViewNum: log.LastOpNum() + 1}})
+	if log.LastOpNum() != prev+1 {
+		t.Errorf("last op-number = %d, expected = %d", log.LastOpNum(), prev+1)
 	}
-	entries := opLog.entries(opLog.lastOpNum())
+	entries := log.Entries(log.LastOpNum())
 	if len(entries) != 1 {
 		t.Errorf("entries length = %d, expected = %d", len(entries), 1)
 	}
@@ -395,18 +400,18 @@ func TestLogStore(t *testing.T) {
 	applied := proto.Applied{ViewStamp:proto.ViewStamp{OpNum: opNum, ViewNum: viewNum}}
 	store := NewStore()
 	store.SetAppliedState(proto.AppliedState{Applied: applied})
-	log := newOpLog(store)
-	if len(log.totalEntries()) != 0 {
-		t.Errorf("len = %d, expected 0", len(log.totalEntries()))
+	log := New(store)
+	if len(log.TotalEntries()) != 0 {
+		t.Errorf("len = %d, expected 0", len(log.TotalEntries()))
 	}
-	if log.commitNum != opNum {
-		t.Errorf("commit-number = %d, expected %d", log.commitNum, opNum)
+	if log.CommitNum != opNum {
+		t.Errorf("commit-number = %d, expected %d", log.CommitNum, opNum)
 	}
-	if log.unsafe.offset != opNum+1 {
-		t.Errorf("unsafe = %v, expected %d", log.unsafe, opNum+1)
+	if log.Unsafe.Offset != opNum+1 {
+		t.Errorf("unsafe = %v, expected %d", log.Unsafe, opNum+1)
 	}
-	if log.viewNum(opNum) != viewNum {
-		t.Errorf("view-number = %d, expected %d", log.viewNum(opNum), viewNum)
+	if log.ViewNum(opNum) != viewNum {
+		t.Errorf("view-number = %d, expected %d", log.ViewNum(opNum), viewNum)
 	}
 }
 
@@ -415,9 +420,9 @@ func TestIsOutOfBounds(t *testing.T) {
 	num := uint64(100)
 	store := NewStore()
 	store.SetAppliedState(proto.AppliedState{Applied:proto.Applied{ViewStamp:proto.ViewStamp{OpNum: offset}}})
-	opLog := newOpLog(store)
+	log := New(store)
 	for i := uint64(1); i <= num; i++ {
-		opLog.append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: i + offset}})
+		log.Append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: i + offset}})
 	}
 	start := offset + 1
 	cases := []struct {
@@ -442,7 +447,7 @@ func TestIsOutOfBounds(t *testing.T) {
 					}
 				}
 			}()
-			opLog.mustInspectionOverflow(test.low, test.up)
+			log.mustInspectionOverflow(test.low, test.up)
 			if test.expPanic {
 				t.Errorf("%d: panic = %v, expected %v", i, false, true)
 			}
@@ -456,9 +461,9 @@ func TestViewNum(t *testing.T) {
 	num := uint64(100)
 	store := NewStore()
 	store.SetAppliedState(proto.AppliedState{Applied:proto.Applied{ViewStamp:proto.ViewStamp{OpNum: offset, ViewNum: 1}}})
-	l := newOpLog(store)
+	l := New(store)
 	for i = 1; i < num; i++ {
-		l.append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: offset + i, ViewNum: i}})
+		l.Append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: offset + i, ViewNum: i}})
 	}
 	cases := []struct {
 		opNum uint64
@@ -471,7 +476,7 @@ func TestViewNum(t *testing.T) {
 		{offset + num,0},
 	}
 	for j, test := range cases {
-		viewNum := l.viewNum(test.opNum)
+		viewNum := l.ViewNum(test.opNum)
 		if !reflect.DeepEqual(viewNum, test.exp) {
 			t.Errorf("#%d: at = %d, expected %d", j, viewNum, test.exp)
 		}
@@ -483,8 +488,8 @@ func TestViewNumWithUnsafeAppliedState(t *testing.T) {
 	unsafeAppliedStateOpNum := storeAppliedStateOpNum + 5
 	store := NewStore()
 	store.SetAppliedState(proto.AppliedState{Applied:proto.Applied{ViewStamp:proto.ViewStamp{OpNum: storeAppliedStateOpNum, ViewNum: 1}}})
-	opLog := newOpLog(store)
-	opLog.recover(proto.AppliedState{Applied:proto.Applied{ViewStamp:proto.ViewStamp{OpNum: unsafeAppliedStateOpNum, ViewNum: 1}}})
+	log := New(store)
+	log.Recover(proto.AppliedState{Applied:proto.Applied{ViewStamp:proto.ViewStamp{OpNum: unsafeAppliedStateOpNum, ViewNum: 1}}})
 	cases := []struct {
 		opNum uint64
 		exp   uint64
@@ -495,7 +500,7 @@ func TestViewNumWithUnsafeAppliedState(t *testing.T) {
 		{unsafeAppliedStateOpNum,1},
 	}
 	for i, test := range cases {
-		viewNum := opLog.viewNum(test.opNum)
+		viewNum := log.ViewNum(test.opNum)
 		if !reflect.DeepEqual(viewNum, test.exp) {
 			t.Errorf("#%d: at = %d, expected %d", i, viewNum, test.exp)
 		}
@@ -508,9 +513,9 @@ func TestSeek(t *testing.T) {
 	num := uint64(100)
 	store := NewStore()
 	store.SetAppliedState(proto.AppliedState{Applied:proto.Applied{ViewStamp:proto.ViewStamp{OpNum: offset}}})
-	opLog := newOpLog(store)
+	log := New(store)
 	for i = 1; i < num; i++ {
-		opLog.append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: offset + i, ViewNum: offset + i}})
+		log.Append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: offset + i, ViewNum: offset + i}})
 	}
 	cases := []struct {
 		from     uint64
@@ -533,7 +538,7 @@ func TestSeek(t *testing.T) {
 					}
 				}
 			}()
-			rv := opLog.subset(test.from, test.to)
+			rv := log.Subset(test.from, test.to)
 			if !reflect.DeepEqual(rv, test.exp) {
 				t.Errorf("#%d: from %d to %d = %v, expected %v", j, test.from, test.to, rv, test.exp)
 			}
@@ -543,27 +548,27 @@ func TestSeek(t *testing.T) {
 
 func TestScanCollision(t *testing.T) {
 	initViewStampCase()
-	presetEntries := []proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}}
+	presetEntries := []proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}}
 	cases := []struct {
 		entries      []proto.Entry
 		expCollision uint64
 	}{
 		{[]proto.Entry{},0},
 		{[]proto.Entry{},0},
-		{[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}},0},
-		{[]proto.Entry{{ViewStamp:v2o2}, {ViewStamp:v3o3}}, 0},
-		{[]proto.Entry{{ViewStamp:v3o3}}, 0},
-		{[]proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}, {ViewStamp:v4o4}, {ViewStamp:v4o5}},4},
-		{[]proto.Entry{{ViewStamp:v2o2}, {ViewStamp:v3o3}, {ViewStamp:v4o4}, {ViewStamp:v4o5}}, 4},
-		{[]proto.Entry{{ViewStamp:v3o3}, {ViewStamp:v4o4}, {ViewStamp:v4o5}},4},
-		{[]proto.Entry{{ViewStamp:v4o4}, {ViewStamp:v4o5}}, 4},
-		{[]proto.Entry{{ViewStamp:v4o1}, {ViewStamp:v4o2}}, 1},
-		{[]proto.Entry{{ViewStamp:v1o2}, {ViewStamp:v4o3}, {ViewStamp:v4o4}}, 2},
-		{[]proto.Entry{{ViewStamp:v1o3}, {ViewStamp:v2o4}, {ViewStamp:v4o5}, {ViewStamp:v4o6}},3},
+		{[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}},0},
+		{[]proto.Entry{{ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}}, 0},
+		{[]proto.Entry{{ViewStamp:spec.V3o3}}, 0},
+		{[]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}, {ViewStamp:spec.V4o4}, {ViewStamp:spec.V4o5}},4},
+		{[]proto.Entry{{ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}, {ViewStamp:spec.V4o4}, {ViewStamp:spec.V4o5}}, 4},
+		{[]proto.Entry{{ViewStamp:spec.V3o3}, {ViewStamp:spec.V4o4}, {ViewStamp:spec.V4o5}},4},
+		{[]proto.Entry{{ViewStamp:spec.V4o4}, {ViewStamp:spec.V4o5}}, 4},
+		{[]proto.Entry{{ViewStamp:spec.V4o1}, {ViewStamp:spec.V4o2}}, 1},
+		{[]proto.Entry{{ViewStamp:spec.V1o2}, {ViewStamp:spec.V4o3}, {ViewStamp:spec.V4o4}}, 2},
+		{[]proto.Entry{{ViewStamp:spec.V1o3}, {ViewStamp:spec.V2o4}, {ViewStamp:spec.V4o5}, {ViewStamp:spec.V4o6}},3},
 	}
 	for i, test := range cases {
-		log := newOpLog(NewStore())
-		log.append(presetEntries...)
+		log := New(NewStore())
+		log.Append(presetEntries...)
 		collisionPos := log.scanCollision(test.entries)
 		if collisionPos != test.expCollision {
 			t.Errorf("#%d: collision = %d, expected %d", i, collisionPos, test.expCollision)
@@ -573,26 +578,26 @@ func TestScanCollision(t *testing.T) {
 
 func TestIsUpToDate(t *testing.T) {
 	initViewStampCase()
-	prevEntries := []proto.Entry{{ViewStamp:v1o1}, {ViewStamp:v2o2}, {ViewStamp:v3o3}}
-	opLog := newOpLog(NewStore())
-	opLog.append(prevEntries...)
+	prevEntries := []proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}}
+	log := New(NewStore())
+	log.Append(prevEntries...)
 	cases := []struct {
 		lastOpNum   uint64
 		viewNum     uint64
 		expUpToDate bool
 	}{
-		{opLog.lastOpNum() - 1,4,true},
-		{opLog.lastOpNum(), 4,true},
-		{opLog.lastOpNum() + 1,4,true},
-		{opLog.lastOpNum() - 1,2,false},
-		{opLog.lastOpNum(), 2,false},
-		{opLog.lastOpNum() + 1,2,false},
-		{opLog.lastOpNum() - 1,3,false},
-		{opLog.lastOpNum(),3,true},
-		{opLog.lastOpNum() + 1,3,true},
+		{log.LastOpNum() - 1,4,true},
+		{log.LastOpNum(), 4,true},
+		{log.LastOpNum() + 1,4,true},
+		{log.LastOpNum() - 1,2,false},
+		{log.LastOpNum(), 2,false},
+		{log.LastOpNum() + 1,2,false},
+		{log.LastOpNum() - 1,3,false},
+		{log.LastOpNum(),3,true},
+		{log.LastOpNum() + 1,3,true},
 	}
 	for i, test := range cases {
-		rv := opLog.isUpToDate(test.lastOpNum, test.viewNum)
+		rv := log.isUpToDate(test.lastOpNum, test.viewNum)
 		if rv != test.expUpToDate {
 			t.Errorf("#%d: up to date = %v, expected %v", i, rv, test.expUpToDate)
 		}
@@ -608,15 +613,15 @@ func TestUnsafeTryViewNum(t *testing.T) {
 		expOk      bool
 		expViewNum uint64
 	}{
-		{[]proto.Entry{{ViewStamp:v1o5}},5,5,true,1 },
-		{[]proto.Entry{{ViewStamp:v1o5}},5,6,false,0 },
-		{[]proto.Entry{{ViewStamp:v1o5}},5,4,false,0 },
+		{[]proto.Entry{{ViewStamp:spec.V1o5}},5,5,true,1 },
+		{[]proto.Entry{{ViewStamp:spec.V1o5}},5,6,false,0 },
+		{[]proto.Entry{{ViewStamp:spec.V1o5}},5,4,false,0 },
 		{[]proto.Entry{},0,5,false,0 },
 	}
 	for i, test := range cases {
-		u := unsafe{
+		u := Unsafe{
 			entries: test.entries,
-			offset:  test.offset,
+			Offset:  test.offset,
 		}
 		viewNum, ok := u.tryGetViewNum(test.opNum)
 		if ok != test.expOk {
@@ -630,16 +635,16 @@ func TestUnsafeTryViewNum(t *testing.T) {
 
 func TestUnsafeRecover(t *testing.T) {
 	initViewStampCase()
-	us := unsafe{
-		entries:  []proto.Entry{{ViewStamp:v1o5}},
-		offset:   5,
-		appliedState: &proto.AppliedState{Applied: proto.Applied{ViewStamp:v1o4}},
+	us := Unsafe{
+		entries:  []proto.Entry{{ViewStamp:spec.V1o5}},
+		Offset:   5,
+		appliedState: &proto.AppliedState{Applied: proto.Applied{ViewStamp:spec.V1o4}},
 	}
-	as := proto.AppliedState{Applied: proto.Applied{ViewStamp:v2o6}}
+	as := proto.AppliedState{Applied: proto.Applied{ViewStamp:spec.V2o6}}
 	us.recover(as)
 
-	if us.offset != as.Applied.ViewStamp.OpNum+1 {
-		t.Errorf("offset = %d, expected %d", us.offset, as.Applied.ViewStamp.OpNum+1)
+	if us.Offset != as.Applied.ViewStamp.OpNum+1 {
+		t.Errorf("offset = %d, expected %d", us.Offset, as.Applied.ViewStamp.OpNum+1)
 	}
 	if len(us.entries) != 0 {
 		t.Errorf("len = %d, expected 0", len(us.entries))
@@ -665,39 +670,39 @@ func TestUnsafeSafeTo(t *testing.T) {
 			0, 0,
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5,
 			5, 1, // safe to the first entry
 			6, 0,
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}, {ViewStamp:v1o6}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V1o5}, {ViewStamp:spec.V1o6}}, 5,
 			5, 1, // safe to the first entry
 			6, 1,
 		},
 		{
-			[]proto.Entry{{ViewStamp:v2o6}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V2o6}}, 5,
 			6, 1, // safe to the first entry and view-number mismatch
 			5, 1,
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5,
 			4, 1, // safe to old entry
 			5, 1,
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5,
 			4, 2, // safe to old entry
 			5, 1,
 		},
 	}
 	for i, test := range cases {
-		u := unsafe{
+		u := Unsafe{
 			entries: test.entries,
-			offset:  test.offset,
+			Offset:  test.offset,
 		}
 		u.safeTo(test.opNum, test.viewNum)
-		if u.offset != test.expOffset {
-			t.Errorf("#%d: offset = %d, expected %d", i, u.offset, test.expOffset)
+		if u.Offset != test.expOffset {
+			t.Errorf("#%d: offset = %d, expected %d", i, u.Offset, test.expOffset)
 		}
 		if len(u.entries) != test.expLen {
 			t.Errorf("#%d: len = %d, expected %d", i, len(u.entries), test.expLen)
@@ -715,39 +720,39 @@ func TestUnsafeTruncateAndAppend(t *testing.T) {
 		expEntries []proto.Entry
 	}{
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5,
-			[]proto.Entry{{ViewStamp:v1o6}, {ViewStamp:v1o7}},
-			5, []proto.Entry{{ViewStamp:v1o5}, {ViewStamp:v1o6}, {ViewStamp:v1o7}},
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V1o6}, {ViewStamp:spec.V1o7}},
+			5, []proto.Entry{{ViewStamp:spec.V1o5}, {ViewStamp:spec.V1o6}, {ViewStamp:spec.V1o7}},
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5,
-			[]proto.Entry{{ViewStamp:v2o5}, {ViewStamp:v2o6}},
-			5, []proto.Entry{{ViewStamp:v2o5}, {ViewStamp:v2o6}},
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V2o5}, {ViewStamp:spec.V2o6}},
+			5, []proto.Entry{{ViewStamp:spec.V2o5}, {ViewStamp:spec.V2o6}},
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5,
-			[]proto.Entry{{ViewStamp:v2o4}, {ViewStamp:v2o5}, {ViewStamp:v2o6}},
-			4, []proto.Entry{{ViewStamp:v2o4}, {ViewStamp: v2o5}, {ViewStamp:v2o6}},
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V2o4}, {ViewStamp:spec.V2o5}, {ViewStamp:spec.V2o6}},
+			4, []proto.Entry{{ViewStamp:spec.V2o4}, {ViewStamp: spec.V2o5}, {ViewStamp:spec.V2o6}},
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}, {ViewStamp:v1o6}, {ViewStamp:v1o7}}, 5,
-			[]proto.Entry{{ViewStamp:v2o6}},
-			5, []proto.Entry{{ViewStamp:v1o5}, {ViewStamp:v2o6}},
+			[]proto.Entry{{ViewStamp:spec.V1o5}, {ViewStamp:spec.V1o6}, {ViewStamp:spec.V1o7}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V2o6}},
+			5, []proto.Entry{{ViewStamp:spec.V1o5}, {ViewStamp:spec.V2o6}},
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}, {ViewStamp:v1o6}, {ViewStamp:v1o7}}, 5,
-			[]proto.Entry{{ViewStamp:v2o7}, {ViewStamp:v2o8}},
-			5, []proto.Entry{{ViewStamp:v1o5}, {ViewStamp:v1o6}, {ViewStamp:v2o7}, {ViewStamp:v2o8}},
+			[]proto.Entry{{ViewStamp:spec.V1o5}, {ViewStamp:spec.V1o6}, {ViewStamp:spec.V1o7}}, 5,
+			[]proto.Entry{{ViewStamp:spec.V2o7}, {ViewStamp:spec.V2o8}},
+			5, []proto.Entry{{ViewStamp:spec.V1o5}, {ViewStamp:spec.V1o6}, {ViewStamp:spec.V2o7}, {ViewStamp:spec.V2o8}},
 		},
 	}
 	for i, test := range cases {
-		u := unsafe{
+		u := Unsafe{
 			entries: test.entries,
-			offset:  test.offset,
+			Offset:  test.offset,
 		}
 		u.truncateAndAppend(test.toAppend)
-		if u.offset != test.expOffset {
-			t.Errorf("#%d: offset = %d, expected %d", i, u.offset, test.expOffset)
+		if u.Offset != test.expOffset {
+			t.Errorf("#%d: offset = %d, expected %d", i, u.Offset, test.expOffset)
 		}
 		if !reflect.DeepEqual(u.entries, test.expEntries) {
 			t.Errorf("#%d: entries = %v, expected %v", i, u.entries, test.expEntries)
@@ -765,7 +770,7 @@ func TestUnsafeTryStartOpNum(t *testing.T) {
 		expOpNum uint64
 	}{
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5, nil,
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5, nil,
 			false, 0,
 		},
 		{
@@ -773,18 +778,18 @@ func TestUnsafeTryStartOpNum(t *testing.T) {
 			false, 0,
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:v1o4}},
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:spec.V1o4}},
 			true, 5,
 		},
 		{
-			[]proto.Entry{}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:v1o4}},
+			[]proto.Entry{}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:spec.V1o4}},
 			true, 5,
 		},
 	}
 	for i, test := range cases {
-		us := unsafe{
+		us := Unsafe{
 			entries:  test.entries,
-			offset:   test.offset,
+			Offset:   test.offset,
 			appliedState: test.as,
 		}
 		opNum, ok := us.tryGetStartOpNum()
@@ -807,15 +812,15 @@ func TestTryLastOpNum(t *testing.T) {
 		expOpNum uint64
 	}{
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5, nil,
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5, nil,
 			true, 5,
 		},
 		{
-			[]proto.Entry{{ViewStamp:v1o5}}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:v1o4}},
+			[]proto.Entry{{ViewStamp:spec.V1o5}}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:spec.V1o4}},
 			true, 5,
 		},
 		{
-			[]proto.Entry{}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:v1o4}},
+			[]proto.Entry{}, 5, &proto.AppliedState{Applied: proto.Applied{ViewStamp:spec.V1o4}},
 			true, 4,
 		},
 		{
@@ -824,9 +829,9 @@ func TestTryLastOpNum(t *testing.T) {
 		},
 	}
 	for i, test := range cases {
-		us := unsafe{
+		us := Unsafe{
 			entries: test.entries,
-			offset:  test.offset,
+			Offset:  test.offset,
 			appliedState: test.as,
 		}
 		opNum, ok := us.tryGetLastOpNum()
