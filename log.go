@@ -1,32 +1,59 @@
 package log
 
 import (
-	"log"
+	logger "log"
 	"fmt"
 	"sync"
 	"errors"
 	"github.com/open-fsm/spec/proto"
 )
 
-var ErrNotReached = errors.New("vr.Store: access entry at op-number is not reached")
-var ErrArchived = errors.New("vr.Store: access op-number is not reached due to archive")
-var ErrOverflow = errors.New("vr.Store: overflow")
-var ErrUnavailable = errors.New("vr.Store: requested entry at op-number is unavailable")
+var ErrNotReached = errors.New("log.store: access entry at op-number is not reached")
+var ErrArchived = errors.New("log.store: access op-number is not reached due to archive")
+var ErrOverflow = errors.New("log.store: overflow")
+var ErrUnavailable = errors.New("log.store: requested entry at op-number is unavailable")
 
-// operation log manager for view stamped replication
-type Log struct {
+type Log interface {
+	Init(u Unsafe, commitNum  uint64)
+	Subset(low uint64, up uint64) []proto.Entry
+	TryAppend(opNum, loggerNum, commitNum uint64, entries ...proto.Entry) (lastNewOpNum uint64, ok bool)
+	Append(entries ...proto.Entry) uint64
+	UnsafeEntries() []proto.Entry
+	UnsafeAppliedState() *proto.AppliedState
+	SafeEntries() (entries []proto.Entry)
+	AppliedState() (proto.AppliedState, error)
+	StartOpNum() uint64
+	LastOpNum() uint64
+	CommitTo(commitNum uint64)
+	AppliedTo(num uint64)
+	Entries(num uint64) []proto.Entry
+	SafeTo(on, vn uint64)
+	TryCommit(maxOpNum, viewNum uint64) bool
+	TotalEntries() []proto.Entry
+	CheckNum(on, vn uint64) bool
+	ViewNum(num uint64) uint64
+	Committed() uint64
+	SetCommitted(uint64)
+	Applied() uint64
+	Recover(state proto.AppliedState)
+	LastViewNum() uint64
+	SafeAppliedStateTo(num uint64)
+}
+
+// operation logger manager for view stamped replication
+type log struct {
 	// has not been WAL
 	Unsafe
 
 	Store      *Store // Store handler
 	CommitNum  uint64 // current committed location
-	AppliedNum uint64 // logs that have been applied
+	AppliedNum uint64 // loggers that have been applied
 }
 
-// create and initialize an object handler to manage logs
-func New(store *Store) *Log {
+// create and initialize an object handler to manage loggers
+func New(store *Store) Log {
 	if store == nil {
-		log.Panic("vr.oplog: stores must not be nil")
+		logger.Panic("log: stores must not be nil")
 	}
 	startOpNum, err := store.StartOpNum()
 	if err != nil {
@@ -36,27 +63,31 @@ func New(store *Store) *Log {
 	if err != nil {
 		panic(err)
 	}
-	opLog := &Log{
+	log := &log{
 		Store:      store,
 		CommitNum:  startOpNum - 1,
 		AppliedNum: startOpNum - 1,
 	}
-	opLog.Offset = lastOpNum + 1
-	return opLog
+	log.Offset = lastOpNum + 1
+	return log
 }
 
-func (l *Log) mustInspectionOverflow(low, up uint64) {
+func (l *log) Init(u Unsafe, commitNum  uint64) {
+	l.Unsafe = u
+	l.CommitNum = commitNum
+}
+
+func (l *log) mustInspectionOverflow(low, up uint64) {
 	if low > up {
-		log.Panicf("vr.oplog: invalid Subset %d > %d", low, up)
+		logger.Panicf("log: invalid Subset %d > %d", low, up)
 	}
 	length := l.LastOpNum() - l.StartOpNum() + 1
 	if low < l.StartOpNum() || up > l.StartOpNum()+length {
-		log.Panicf("vr.oplog: Subset[%d,%d) overflow [%d,%d]", low, up, l.StartOpNum(), l.LastOpNum())
+		logger.Panicf("log: subset[%d,%d) overflow [%d,%d]", low, up, l.StartOpNum(), l.LastOpNum())
 	}
 }
 
-// search part of log Entries
-func (l *Log) Subset(low uint64, up uint64) []proto.Entry {
+func (l *log) Subset(low uint64, up uint64) []proto.Entry {
 	l.mustInspectionOverflow(low, up)
 	if low == up {
 		return nil
@@ -65,7 +96,7 @@ func (l *Log) Subset(low uint64, up uint64) []proto.Entry {
 	if l.Unsafe.Offset > low {
 		storedEntries, err := l.Store.Subset(low, min(up, l.Unsafe.Offset))
 		if err == ErrNotReached {
-			log.Panicf("vr.oplog: Entries[%d:%d) is unavailable from stores", low, min(up, l.Unsafe.Offset))
+			logger.Panicf("log: Entries[%d:%d) is unavailable from stores", low, min(up, l.Unsafe.Offset))
 		} else if err != nil {
 			panic(err)
 		}
@@ -83,14 +114,14 @@ func (l *Log) Subset(low uint64, up uint64) []proto.Entry {
 	return entries
 }
 
-func (l *Log) TryAppend(opNum, logNum, commitNum uint64, entries ...proto.Entry) (lastNewOpNum uint64, ok bool) {
+func (l *log) TryAppend(opNum, loggerNum, commitNum uint64, entries ...proto.Entry) (lastNewOpNum uint64, ok bool) {
 	lastNewOpNum = opNum + uint64(len(entries))
-	if l.CheckNum(opNum, logNum) {
+	if l.CheckNum(opNum, loggerNum) {
 		sc := l.scanCollision(entries)
 		switch {
 		case sc == 0:
 		case sc <= l.CommitNum:
-			log.Panicf("vr.oplog: entry %d collision with commit-number entry [commit-number(%d)]", sc, l.CommitNum)
+			logger.Panicf("log: entry %d collision with commit-number entry [commit-number(%d)]", sc, l.CommitNum)
 		default:
 			offset := opNum + 1
 			l.Append(entries[sc-offset:]...)
@@ -101,22 +132,22 @@ func (l *Log) TryAppend(opNum, logNum, commitNum uint64, entries ...proto.Entry)
 	return 0, false
 }
 
-func (l *Log) Append(entries ...proto.Entry) uint64 {
+func (l *log) Append(entries ...proto.Entry) uint64 {
 	if len(entries) == 0 {
 		return l.LastOpNum()
 	}
 	if ahead := entries[0].ViewStamp.OpNum - 1; ahead < l.CommitNum {
-		log.Panicf("vr.oplog: ahead(%d) is out of range [commit-number(%d)]", ahead, l.CommitNum)
+		logger.Panicf("log: ahead(%d) is out of range [commit-number(%d)]", ahead, l.CommitNum)
 	}
 	l.Unsafe.truncateAndAppend(entries)
 	return l.LastOpNum()
 }
 
-func (l *Log) scanCollision(entries []proto.Entry) uint64 {
+func (l *log) scanCollision(entries []proto.Entry) uint64 {
 	for _, entry := range entries {
 		if !l.CheckNum(entry.ViewStamp.OpNum, entry.ViewStamp.ViewNum) {
 			if entry.ViewStamp.OpNum <= l.LastOpNum() {
-				log.Printf("vr.oplog: scan to collision at op-number %d [existing view-number: %d, collision view-number: %d]",
+				logger.Printf("log: scan to collision at op-number %d [existing view-number: %d, collision view-number: %d]",
 					entry.ViewStamp.OpNum, l.ViewNum(entry.ViewStamp.OpNum), entry.ViewStamp.ViewNum)
 			}
 			return entry.ViewStamp.OpNum
@@ -125,18 +156,18 @@ func (l *Log) scanCollision(entries []proto.Entry) uint64 {
 	return 0
 }
 
-func (l *Log) UnsafeEntries() []proto.Entry {
+func (l *log) UnsafeEntries() []proto.Entry {
 	if len(l.Unsafe.entries) == 0 {
 		return nil
 	}
 	return l.Unsafe.entries
 }
 
-func (l *Log) UnsafeAppliedState() *proto.AppliedState {
+func (l *log) UnsafeAppliedState() *proto.AppliedState {
 	return l.Unsafe.appliedState
 }
 
-func (l *Log) SafeEntries() (entries []proto.Entry) {
+func (l *log) SafeEntries() (entries []proto.Entry) {
 	num := max(l.AppliedNum+1, l.StartOpNum())
 	if l.CommitNum+1 > num {
 		return l.Subset(num, l.CommitNum+1)
@@ -144,14 +175,14 @@ func (l *Log) SafeEntries() (entries []proto.Entry) {
 	return nil
 }
 
-func (l *Log) AppliedState() (proto.AppliedState, error) {
+func (l *log) AppliedState() (proto.AppliedState, error) {
 	if l.Unsafe.appliedState != nil {
 		return *l.Unsafe.appliedState, nil
 	}
 	return l.Store.GetAppliedState()
 }
 
-func (l *Log) StartOpNum() uint64 {
+func (l *log) StartOpNum() uint64 {
 	if num, ok := l.Unsafe.tryGetStartOpNum(); ok {
 		return num
 	}
@@ -162,7 +193,7 @@ func (l *Log) StartOpNum() uint64 {
 	return num
 }
 
-func (l *Log) LastOpNum() uint64 {
+func (l *log) LastOpNum() uint64 {
 	if num, ok := l.Unsafe.tryGetLastOpNum(); ok {
 		return num
 	}
@@ -173,38 +204,38 @@ func (l *Log) LastOpNum() uint64 {
 	return num
 }
 
-func (l *Log) CommitTo(commitNum uint64) {
+func (l *log) CommitTo(commitNum uint64) {
 	if l.CommitNum < commitNum {
 		if l.LastOpNum() < commitNum {
-			log.Panicf("vr.oplog: to commit-number(%d) is out of range [last-op-number(%d)]", commitNum, l.LastOpNum())
+			logger.Panicf("log: to commit-number(%d) is out of range [last-op-number(%d)]", commitNum, l.LastOpNum())
 		}
 		l.CommitNum = commitNum
 	}
 }
 
-func (l *Log) AppliedTo(num uint64) {
+func (l *log) AppliedTo(num uint64) {
 	if num == 0 {
 		return
 	}
 	if l.CommitNum < num || num < l.AppliedNum {
-		log.Panicf("vr.oplog: applied-number(%d) is out of range [prev-applied-number(%d), commit-number(%d)]", num, l.AppliedNum, l.CommitNum)
+		logger.Panicf("log: applied-number(%d) is out of range [prev-applied-number(%d), commit-number(%d)]", num, l.AppliedNum, l.CommitNum)
 	}
 	l.AppliedNum = num
 }
 
-func (l *Log) SafeTo(on, vn uint64) {
+func (l *log) SafeTo(on, vn uint64) {
 	l.Unsafe.safeTo(on, vn)
 }
 
-func (l *Log) SafeAppliedStateTo(num uint64) {
+func (l *log) SafeAppliedStateTo(num uint64) {
 	l.Unsafe.safeAppliedStateTo(num)
 }
 
-func (l *Log) LastViewNum() uint64 {
+func (l *log) LastViewNum() uint64 {
 	return l.ViewNum(l.LastOpNum())
 }
 
-func (l *Log) ViewNum(num uint64) uint64 {
+func (l *log) ViewNum(num uint64) uint64 {
 	if num < (l.StartOpNum()-1) || num > l.LastOpNum() {
 		return 0
 	}
@@ -218,26 +249,26 @@ func (l *Log) ViewNum(num uint64) uint64 {
 	panic(err)
 }
 
-func (l *Log) Entries(num uint64) []proto.Entry {
+func (l *log) Entries(num uint64) []proto.Entry {
 	if num > l.LastOpNum() {
 		return nil
 	}
 	return l.Subset(num, l.LastOpNum()+1)
 }
 
-func (l *Log) TotalEntries() []proto.Entry {
+func (l *log) TotalEntries() []proto.Entry {
 	return l.Entries(l.StartOpNum())
 }
 
-func (l *Log) isUpToDate(lastOpNum, viewNum uint64) bool {
+func (l *log) isUpToDate(lastOpNum, viewNum uint64) bool {
 	return viewNum > l.LastViewNum() || (viewNum == l.LastViewNum() && lastOpNum >= l.LastOpNum())
 }
 
-func (l *Log) CheckNum(on, vn uint64) bool {
+func (l *log) CheckNum(on, vn uint64) bool {
 	return l.ViewNum(on) == vn
 }
 
-func (l *Log) TryCommit(maxOpNum, viewNum uint64) bool {
+func (l *log) TryCommit(maxOpNum, viewNum uint64) bool {
 	if maxOpNum > l.CommitNum && l.ViewNum(maxOpNum) == viewNum {
 		l.CommitTo(maxOpNum)
 		return true
@@ -245,14 +276,26 @@ func (l *Log) TryCommit(maxOpNum, viewNum uint64) bool {
 	return false
 }
 
-func (l *Log) Recover(state proto.AppliedState) {
-	log.Printf("vr.oplog: log [%s] starts to reset applied state [op-number: %d, view-number: %d]", l, state.Applied.ViewStamp.OpNum, state.Applied.ViewStamp.ViewNum)
+func (l *log) Recover(state proto.AppliedState) {
+	logger.Printf("log: logger [%s] starts to reset applied state [op-number: %d, view-number: %d]", l, state.Applied.ViewStamp.OpNum, state.Applied.ViewStamp.ViewNum)
 	l.CommitNum = state.Applied.ViewStamp.OpNum
 	l.Unsafe.recover(state)
 }
 
-func (l *Log) String() string {
-	return fmt.Sprintf("vr.oplog: commit-number=%d, applied-number=%d, Unsafe.offsets=%d, len(Unsafe.persistent_entries)=%d", l.CommitNum, l.AppliedNum, l.Unsafe.Offset, len(l.Unsafe.entries))
+func (l *log) Committed() uint64 {
+	return l.CommitNum
+}
+
+func (l *log) SetCommitted(num uint64) {
+	l.CommitNum = num
+}
+
+func (l *log) Applied() uint64 {
+	return l.AppliedNum
+}
+
+func (l *log) String() string {
+	return fmt.Sprintf("log: commit-number=%d, applied-number=%d, Unsafe.offsets=%d, len(Unsafe.persistent_entries)=%d", l.CommitNum, l.AppliedNum, l.Unsafe.Offset, len(l.Unsafe.entries))
 }
 
 // storage models of view stamped replication
@@ -260,7 +303,7 @@ type Store struct {
 	sync.Mutex
 	HardState    proto.HardState    // persistent state that has been stored to disk
 	appliedState proto.AppliedState // the state that has been used by the application layer
-	Entries      []proto.Entry      // used to manage newly added log Entries
+	Entries      []proto.Entry      // used to manage newly added logger Entries
 }
 
 func NewStore() *Store {
@@ -317,7 +360,7 @@ func (s *Store) Append(entries []proto.Entry) error {
 	} else if uint64(len(s.Entries)) == offset {
 		s.Entries = append(s.Entries, entries...)
 	} else {
-		log.Panicf("vr.Store: not found oplog entry [last: %d, Append at: %d]",
+		logger.Panicf("log.store: not found oplogger entry [last: %d, Append at: %d]",
 			s.appliedState.Applied.ViewStamp.OpNum+uint64(len(s.Entries)), entries[0].ViewStamp.OpNum)
 	}
 	return nil
@@ -331,7 +374,7 @@ func (s *Store) Subset(low, up uint64) ([]proto.Entry, error) {
 		return nil, ErrArchived
 	}
 	if up > s.lastOpNum()+1 {
-		log.Panicf("vr.Store: Entries up(%d) is overflow last-op-number(%d)", up, s.lastOpNum())
+		logger.Panicf("log.store: Entries up(%d) is overflow last-op-number(%d)", up, s.lastOpNum())
 	}
 	if len(s.Entries) == 1 {
 		return nil, ErrNotReached
@@ -385,7 +428,7 @@ func (s *Store) CreateAppliedState(num uint64, data []byte, rs *proto.Configurat
 		return proto.AppliedState{}, ErrOverflow
 	}
 	if num > s.lastOpNum() {
-		log.Panicf("vr.Store: applied-number state %d is overflow last op-number(%d)", num, s.lastOpNum())
+		logger.Panicf("log.store: applied-number state %d is overflow last op-number(%d)", num, s.lastOpNum())
 	}
 	s.appliedState.Applied.ViewStamp.OpNum = num
 	s.appliedState.Applied.ViewStamp.ViewNum = s.Entries[num-s.startOpNum()].ViewStamp.ViewNum
@@ -404,7 +447,7 @@ func (s *Store) Archive(archiveNum uint64) error {
 		return ErrArchived
 	}
 	if archiveNum >= s.lastOpNum() {
-		log.Panicf("vr.Store: archive %d is overflow last op-number(%d)", archiveNum, offset+uint64(len(s.Entries))-1)
+		logger.Panicf("log.store: archive %d is overflow last op-number(%d)", archiveNum, offset+uint64(len(s.Entries))-1)
 	}
 	num := archiveNum - offset
 	entries := make([]proto.Entry, 1, 1+uint64(len(s.Entries))-num)
@@ -418,19 +461,19 @@ func (s *Store) Archive(archiveNum uint64) error {
 // used to manage the intermediate state that has not
 // yet been written to disk
 type Unsafe struct {
-	Offset       uint64              // the position of the last log currently loaded
-	entries      []proto.Entry       // temporary logs that have not been wal
+	Offset       uint64              // the position of the last logger currently loaded
+	entries      []proto.Entry       // temporary loggers that have not been wal
 	appliedState *proto.AppliedState // applied state handler
 }
 
 func (u *Unsafe) subset(low uint64, up uint64) []proto.Entry {
 	if low > up {
-		log.Panicf("vr.Unsafe: invalid Unsafe.Subset %d > %d", low, up)
+		logger.Panicf("log.unsafe: invalid Unsafe.Subset %d > %d", low, up)
 	}
 	lower := u.Offset
 	upper := lower + uint64(len(u.entries))
 	if low < lower || up > upper {
-		log.Panicf("vr.Unsafe: Unsafe.Subset[%d,%d) overflow [%d,%d]", low, up, lower, upper)
+		logger.Panicf("log.unsafe: Unsafe.Subset[%d,%d) overflow [%d,%d]", low, up, lower, upper)
 	}
 	return u.entries[low-u.Offset: up-u.Offset]
 }
@@ -440,11 +483,11 @@ func (u *Unsafe) truncateAndAppend(entries []proto.Entry) {
 	if ahead == u.Offset+uint64(len(u.entries))-1 {
 		u.entries = append(u.entries, entries...)
 	} else if ahead < u.Offset {
-		log.Printf("vr.Unsafe: replace the Unsafe Entries from number %d", ahead+1)
+		logger.Printf("log.unsafe: replace the Unsafe Entries from number %d", ahead+1)
 		u.Offset = ahead + 1
 		u.entries = entries
 	} else {
-		log.Printf("vr.Unsafe: truncate the Unsafe Entries to number %d", ahead)
+		logger.Printf("log.unsafe: truncate the Unsafe Entries to number %d", ahead)
 		u.entries = append([]proto.Entry{}, u.subset(u.Offset, ahead+1)...)
 		u.entries = append(u.entries, entries...)
 	}

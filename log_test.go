@@ -28,7 +28,7 @@ func TestAppend(t *testing.T) {
 	for i, test := range cases {
 		store := NewStore()
 		store.Append(prevEntries)
-		log := New(store)
+		log := New(store).(*log)
 		opNum := log.Append(test.entries...)
 		if opNum != test.expOpNum {
 			t.Errorf("#%d: last op-number = %d, expected %d", i, opNum, test.expOpNum)
@@ -120,7 +120,7 @@ func TestTryAppend(t *testing.T) {
 		},
 	}
 	for i, test := range cases {
-		log := New(NewStore())
+		log := New(NewStore()).(*log)
 		log.Append(prevEntries...)
 		log.CommitNum = commitNum
 		func() {
@@ -143,7 +143,7 @@ func TestTryAppend(t *testing.T) {
 				t.Errorf("#%d: commit-number = %d, expected %d", i, vCommitNum, test.expCommitNum)
 			}
 			if rvAppend && len(test.entries) != 0 {
-				rvEntries := log.subset(log.LastOpNum()-uint64(len(test.entries))+1, log.LastOpNum()+1)
+				rvEntries := log.Subset(log.LastOpNum()-uint64(len(test.entries))+1, log.LastOpNum()+1)
 				if !reflect.DeepEqual(test.entries, rvEntries) {
 					t.Errorf("%d: appended entries = %v, expected %v", i, rvEntries, test.entries)
 				}
@@ -196,7 +196,7 @@ func TestUnsafeEntries(t *testing.T) {
 	for i, test := range cases {
 		store := NewStore()
 		store.Append(prevEntries[:test.unsafe-1])
-		log := New(store)
+		log := New(store).(*log)
 		log.Append(prevEntries[test.unsafe-1:]...)
 		entries := log.UnsafeEntries()
 		if l := len(entries); l > 0 {
@@ -234,7 +234,7 @@ func TestCommitTo(t *testing.T) {
 					}
 				}
 			}()
-			log := New(NewStore())
+			log := New(NewStore()).(*log)
 			log.Append(prevEntries...)
 			log.CommitNum = commitNum
 			log.CommitTo(test.commitNum)
@@ -258,7 +258,7 @@ func TestSafeTo(t *testing.T) {
 		{3,1,1},
 	}
 	for i, test := range cases {
-		log := New(NewStore())
+		log := New(NewStore()).(*log)
 		log.Append([]proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}}...)
 		log.SafeTo(test.safeOpNum, test.safeViewNum)
 		if log.Unsafe.Offset != test.expUnsafe {
@@ -292,7 +292,7 @@ func TestSafeToWithAppliedState(t *testing.T) {
 	for i, test := range cases {
 		store := NewStore()
 		store.SetAppliedState(appliedState)
-		log := New(store)
+		log := New(store).(*log)
 		log.Append(test.newEntries...)
 		log.SafeTo(test.safeOpNum, test.safeViewNum)
 		if log.Unsafe.Offset != test.expUnsafe {
@@ -325,7 +325,7 @@ func TestArchive(t *testing.T) {
 			for num := uint64(1); num <= test.lastOpNum; num++ {
 				store.Append([]proto.Entry{{ViewStamp:proto.ViewStamp{OpNum: num}}})
 			}
-			log := New(store)
+			log := New(store).(*log)
 			log.TryCommit(test.lastOpNum, 0)
 			log.AppliedTo(log.CommitNum)
 			for j := 0; j < len(test.archive); j++ {
@@ -353,7 +353,7 @@ func TestArchiveDisorder(t *testing.T) {
 	for i = 1; i <= unsafeOpNum; i++ {
 		store.Append([]proto.Entry{{ViewStamp:proto.ViewStamp{ViewNum: uint64(i), OpNum: uint64(i)}}})
 	}
-	log := New(store)
+	log := New(store).(*log)
 	for i = unsafeOpNum; i < lastOpNum; i++ {
 		log.Append(proto.Entry{ViewStamp:proto.ViewStamp{ViewNum: uint64(i + 1), OpNum: uint64(i + 1)}})
 	}
@@ -400,7 +400,7 @@ func TestLogStore(t *testing.T) {
 	applied := proto.Applied{ViewStamp:proto.ViewStamp{OpNum: opNum, ViewNum: viewNum}}
 	store := NewStore()
 	store.SetAppliedState(proto.AppliedState{Applied: applied})
-	log := New(store)
+	log := New(store).(*log)
 	if len(log.TotalEntries()) != 0 {
 		t.Errorf("len = %d, expected 0", len(log.TotalEntries()))
 	}
@@ -420,7 +420,7 @@ func TestIsOutOfBounds(t *testing.T) {
 	num := uint64(100)
 	store := NewStore()
 	store.SetAppliedState(proto.AppliedState{Applied:proto.Applied{ViewStamp:proto.ViewStamp{OpNum: offset}}})
-	log := New(store)
+	log := New(store).(*log)
 	for i := uint64(1); i <= num; i++ {
 		log.Append(proto.Entry{ViewStamp:proto.ViewStamp{OpNum: i + offset}})
 	}
@@ -567,7 +567,7 @@ func TestScanCollision(t *testing.T) {
 		{[]proto.Entry{{ViewStamp:spec.V1o3}, {ViewStamp:spec.V2o4}, {ViewStamp:spec.V4o5}, {ViewStamp:spec.V4o6}},3},
 	}
 	for i, test := range cases {
-		log := New(NewStore())
+		log := New(NewStore()).(*log)
 		log.Append(presetEntries...)
 		collisionPos := log.scanCollision(test.entries)
 		if collisionPos != test.expCollision {
@@ -579,7 +579,7 @@ func TestScanCollision(t *testing.T) {
 func TestIsUpToDate(t *testing.T) {
 	initViewStampCase()
 	prevEntries := []proto.Entry{{ViewStamp:spec.V1o1}, {ViewStamp:spec.V2o2}, {ViewStamp:spec.V3o3}}
-	log := New(NewStore())
+	log := New(NewStore()).(*log)
 	log.Append(prevEntries...)
 	cases := []struct {
 		lastOpNum   uint64
